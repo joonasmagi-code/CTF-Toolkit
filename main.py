@@ -410,7 +410,7 @@ class CTFApp(ctk.CTk):
 
         ctk.CTkButton(self.container, text="EXIT", command=self.destroy, width=200, height=40, fg_color="#8B0000", hover_color="red").pack(pady=30)
         
-        ctk.CTkLabel(self.container, text="Joonas v10.1", text_color="gray40").place(relx=0.98, rely=0.98, anchor="se")
+        ctk.CTkLabel(self.container, text="Joonas 2026", text_color="gray40").place(relx=0.98, rely=0.98, anchor="se")
 
     def switch(self, frame_class):
         self.clear()
@@ -419,3 +419,4 @@ class CTFApp(ctk.CTk):
 if __name__ == "__main__":
     app = CTFApp()
     app.mainloop()
+
