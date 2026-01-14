@@ -16,7 +16,7 @@ ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("green") 
 
 # =============================================================================
-# 1. TOOL: ZIP MANAGER (UI UPDATED)
+# 1. TOOL: ZIP MANAGER (TURVATUD / SECURED)
 # =============================================================================
 class ZipToolFrame(ctk.CTkFrame):
     def __init__(self, master, return_callback):
@@ -24,6 +24,12 @@ class ZipToolFrame(ctk.CTkFrame):
         self.return_callback = return_callback
         self.extract_folder = "CTF_EXTRACTED"
         self.compress_folder = "CTF_COMPRESSED"
+        
+        # --- SECURITY LIMITS ---
+        self.MAX_FILES = 2000
+        self.MAX_TOTAL_SIZE = 200 * 1024 * 1024  # 200 MB
+        self.MAX_SINGLE_FILE = 50 * 1024 * 1024  # 50 MB
+        
         self.setup_ui()
 
     def setup_ui(self):
@@ -31,7 +37,7 @@ class ZipToolFrame(ctk.CTkFrame):
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=20, pady=10)
         ctk.CTkButton(top, text="< Back", command=self.return_callback, width=80, fg_color="#333333").pack(side="left")
-        ctk.CTkLabel(self, text="Zip Manager", font=("Roboto", 24, "bold")).pack(pady=5)
+        ctk.CTkLabel(self, text="Zip Manager (Secured)", font=("Roboto", 24, "bold")).pack(pady=5)
 
         # Tabs
         self.tabview = ctk.CTkTabview(self, width=900, height=550)
@@ -52,7 +58,7 @@ class ZipToolFrame(ctk.CTkFrame):
         ctrl_ext.pack(pady=10)
         ctk.CTkLabel(ctrl_ext, text="Layers Limit:").pack(side="left", padx=5)
         self.ext_layers = ctk.CTkEntry(ctrl_ext, width=50, justify="center"); self.ext_layers.insert(0, "50"); self.ext_layers.pack(side="left", padx=5)
-        ctk.CTkButton(ctrl_ext, text="Browse & Extract", command=self.run_extract, fg_color="#2E8B57", width=200).pack(side="left", padx=20)
+        ctk.CTkButton(ctrl_ext, text="Browse & Extract (Safe)", command=self.run_extract, fg_color="#2E8B57", width=200).pack(side="left", padx=20)
 
         # Output Section
         ctk.CTkLabel(fr_ext, text="Output / Log:", anchor="w").pack(fill="x", padx=50)
@@ -82,43 +88,106 @@ class ZipToolFrame(ctk.CTkFrame):
     def log(self, box, txt):
         box.insert("end", txt + "\n"); box.see("end")
 
+    # --- SECURITY HELPER FUNCTIONS ---
+    def is_within_directory(self, base_dir, target_path):
+        # Teeb kindlaks, et target_path on tõesti base_dir sees
+        abs_base = os.path.abspath(base_dir)
+        abs_target = os.path.abspath(target_path)
+        return os.path.commonpath([abs_base]) == os.path.commonpath([abs_base, abs_target])
+
+    def validate_zip_safety(self, zip_ref, extract_path):
+        """
+        Kontrollib Zip-Pomme ja Zip-Slip rünnakuid enne lahtipakkimist.
+        """
+        infos = zip_ref.infolist()
+        
+        # 1. Failide arvu piirang
+        if len(infos) > self.MAX_FILES:
+            raise RuntimeError(f"SECURITY WARNING: Too many files ({len(infos)} > {self.MAX_FILES})")
+
+        total_size = 0
+        
+        for info in infos:
+            # 2. Üksiku faili suuruse piirang
+            if info.file_size > self.MAX_SINGLE_FILE:
+                raise RuntimeError(f"SECURITY WARNING: File too large: {info.filename} ({info.file_size / 1024 / 1024:.2f} MB)")
+            
+            total_size += info.file_size
+            
+            # 3. Zip Slip kaitse (Path Traversal)
+            out_path = os.path.join(extract_path, info.filename)
+            if not self.is_within_directory(extract_path, out_path):
+                raise RuntimeError(f"SECURITY WARNING: Path traversal attempt detected (Zip Slip): {info.filename}")
+
+        # 4. Kogumahu piirang
+        if total_size > self.MAX_TOTAL_SIZE:
+             raise RuntimeError(f"SECURITY WARNING: Total extracted size too large ({total_size / 1024 / 1024:.2f} MB)")
+
+    # --- EXTRACT LOGIC ---
     def run_extract(self):
         f = filedialog.askopenfilename(filetypes=[("Zip", "*.zip")])
         if not f: return
-        self.ext_input.delete(0, "end"); self.ext_input.insert(0, f) # Show Input
-        self.ext_log.delete("0.0", "end") # Clear Output
+        self.ext_input.delete(0, "end"); self.ext_input.insert(0, f)
+        self.ext_log.delete("0.0", "end")
         threading.Thread(target=self.do_extract, args=(f,)).start()
 
     def do_extract(self, filename):
         try:
             limit = int(self.ext_layers.get())
             work_dir = os.path.join(os.path.dirname(filename), self.extract_folder)
+            
+            # Puhastame eelmise töö kausta
             if os.path.exists(work_dir): shutil.rmtree(work_dir)
             os.makedirs(work_dir)
             
+            # Kopeerime algse faili
             curr = os.path.join(work_dir, os.path.basename(filename))
             shutil.copy2(filename, curr)
             
             count = 0
+            self.log(self.ext_log, f"Starting Safe Extraction in: {work_dir}")
+
             while count < limit:
                 if not zipfile.is_zipfile(curr): break
-                with zipfile.ZipFile(curr, 'r') as z: z.extractall(work_dir)
+                
+                try:
+                    with zipfile.ZipFile(curr, 'r') as z:
+                        # KÄIVITAME TURVAKONTROLLI
+                        self.validate_zip_safety(z, work_dir)
+                        
+                        # Kui kõik on korras, pakime lahti
+                        z.extractall(work_dir)
+                        self.log(self.ext_log, f"[Layer {count+1}] Verified & Extracted.")
+                        
+                except RuntimeError as e:
+                    self.log(self.ext_log, f"❌ {e}")
+                    self.log(self.ext_log, "ABORTING EXTRACTION DUE TO SECURITY RISK.")
+                    return # Lõpetame töö kohe
+                except Exception as e:
+                    self.log(self.ext_log, f"Error: {e}")
+                    return
+
+                # Kustutame vana zipi
                 os.remove(curr)
-                files = os.listdir(work_dir)
+                
+                # Otsime uut faili (recursive)
+                files = [f for f in os.listdir(work_dir) if not f.startswith('.')] # ignore hidden
                 if not files: break
+                
+                # Võtame esimese leitud faili järgmiseks ringiks
                 curr = os.path.join(work_dir, files[0])
                 count += 1
-                self.log(self.ext_log, f"Layer {count} extracted...")
             
-            self.log(self.ext_log, f"DONE! Files located at: {work_dir}")
+            self.log(self.ext_log, f"✅ DONE! Files located at: {work_dir}")
             os.startfile(work_dir)
-        except Exception as e: self.log(self.ext_log, f"Error: {e}")
+        except Exception as e: self.log(self.ext_log, f"Global Error: {e}")
 
+    # --- COMPRESS LOGIC ---
     def run_compress(self):
         f = filedialog.askopenfilename()
         if not f: return
-        self.comp_input.delete(0, "end"); self.comp_input.insert(0, f) # Show Input
-        self.comp_log.delete("0.0", "end") # Clear Output
+        self.comp_input.delete(0, "end"); self.comp_input.insert(0, f)
+        self.comp_log.delete("0.0", "end")
         threading.Thread(target=self.do_compress, args=(f,)).start()
 
     def do_compress(self, filename):
@@ -454,19 +523,22 @@ class CTFApp(ctk.CTk):
         title_fr = ctk.CTkFrame(self.container, fg_color="transparent")
         title_fr.pack(pady=(60, 40))
         ctk.CTkLabel(title_fr, text="CTF-TOOLKIT", font=("Orbitron", 50, "bold"), text_color="#00ff00").pack()
-        ctk.CTkLabel(title_fr, text="A useful tool for CTFs", font=("Arial", 16), text_color="gray").pack()
+        # UUS ALAMPEALKIRI
+        ctk.CTkLabel(title_fr, text="Essential Toolkit for CTF Challenges", font=("Arial", 16), text_color="gray80").pack()
 
         opts = {"width": 450, "height": 60, "font": ("Roboto", 18, "bold"), "fg_color": "#1f1f1f", "border_color": "#00ff00", "border_width": 2, "hover_color": "#333333"}
         
         ctk.CTkButton(self.container, text="1. Zip Manager (Pack & Unpack)", command=lambda: self.switch(ZipToolFrame), **opts).pack(pady=10)
         ctk.CTkButton(self.container, text="2. Text Converter (B64/Hex/Bin)", command=lambda: self.switch(DecoderFrame), **opts).pack(pady=10)
-        ctk.CTkButton(self.container, text="3. Caesar Cipher (Decrypt All)", command=lambda: self.switch(CaesarFrame), **opts).pack(pady=10)
+        ctk.CTkButton(self.container, text="3. Caesar Cipher", command=lambda: self.switch(CaesarFrame), **opts).pack(pady=10)
         ctk.CTkButton(self.container, text="4. File Analysis (Hash & EXIF)", command=lambda: self.switch(AnalysisFrame), **opts).pack(pady=10)
         
         repo_opts = opts.copy(); repo_opts.update({"fg_color": "#2a0040", "border_color": "#9400D3"})
         ctk.CTkButton(self.container, text="5. Tool Repository (Links)", command=lambda: self.switch(RepoFrame), **repo_opts).pack(pady=20)
 
         ctk.CTkButton(self.container, text="EXIT", command=self.destroy, width=200, height=40, fg_color="#8B0000", hover_color="red").pack(pady=30)
+        
+        # UUS VESIMÄRK
         ctk.CTkLabel(self.container, text="Joonas 2026", text_color="gray40").place(relx=0.98, rely=0.98, anchor="se")
 
     def switch(self, frame_class):
@@ -476,4 +548,3 @@ class CTFApp(ctk.CTk):
 if __name__ == "__main__":
     app = CTFApp()
     app.mainloop()
-    
