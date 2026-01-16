@@ -1,3 +1,10 @@
+# --- Automaatne teekide installeerimine ---
+try:
+    from setup import install_requirements
+    install_requirements()
+except ImportError:
+    pass
+
 import os
 import zipfile
 import shutil
