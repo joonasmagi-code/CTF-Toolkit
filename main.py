@@ -217,7 +217,7 @@ class ZipToolFrame(ctk.CTkFrame):
 
 
 # =============================================================================
-# 2. TOOL: TEXT CONVERTER (STANDARD)
+# 2. TOOL: TEXT CONVERTER (UPDATED: SHOW ALL LOOPS)
 # =============================================================================
 class DecoderFrame(ctk.CTkFrame):
     def __init__(self, master, return_callback):
@@ -298,22 +298,37 @@ class DecoderFrame(ctk.CTkFrame):
             if limit < 1: limit = 1
         except ValueError: limit = 1
         
-        self.out.insert("0.0", f"--- STARTING {action.upper()} {mode.upper()} ({limit} Loops) ---\n")
+        # LOGGING ALL STEPS
+        full_log = f"--- STARTING {action.upper()} {mode.upper()} ({limit} Loops) ---\n"
+        
         current_val = txt
         count = 0
         try:
             for i in range(limit):
-                try: new_val = self.single_step(current_val, action, mode)
-                except: break
-                if not new_val or new_val == current_val: break
+                try: 
+                    new_val = self.single_step(current_val, action, mode)
+                except: 
+                    full_log += f"[Step {i+1}] ❌ Error/Invalid Format\n"
+                    break
+                
+                if not new_val or new_val == current_val: 
+                    full_log += f"[Step {i+1}] 🛑 No Change / End.\n"
+                    break
+                
                 current_val = new_val.strip()
                 count += 1
-            self.out.insert("0.0", f"Result after {count} loops:\n{current_val}\n\n")
-        except Exception as e: self.out.insert("0.0", f"ERROR: {e}\n\n")
+                
+                # APPEND STEP TO LOG
+                full_log += f"[{i+1}]: {current_val}\n"
+            
+            full_log += f"--- FINISHED ---\n\n"
+            self.out.insert("0.0", full_log)
+        except Exception as e: 
+            self.out.insert("0.0", f"CRITICAL ERROR: {e}\n\n")
 
 
 # =============================================================================
-# 3. TOOL: CAESAR CIPHER (UI UPDATED)
+# 3. TOOL: CAESAR CIPHER
 # =============================================================================
 class CaesarFrame(ctk.CTkFrame):
     def __init__(self, master, return_callback):
@@ -382,7 +397,7 @@ class CaesarFrame(ctk.CTkFrame):
 
 
 # =============================================================================
-# 4. TOOL: FILE ANALYSIS (UI UPDATED)
+# 4. TOOL: FILE ANALYSIS
 # =============================================================================
 class AnalysisFrame(ctk.CTkFrame):
     def __init__(self, master, return_callback):
@@ -523,6 +538,7 @@ class CTFApp(ctk.CTk):
         title_fr = ctk.CTkFrame(self.container, fg_color="transparent")
         title_fr.pack(pady=(60, 40))
         ctk.CTkLabel(title_fr, text="CTF-TOOLKIT", font=("Orbitron", 50, "bold"), text_color="#00ff00").pack()
+        
         # UUS ALAMPEALKIRI
         ctk.CTkLabel(title_fr, text="Essential Toolkit for CTF Challenges", font=("Arial", 16), text_color="gray80").pack()
 
@@ -530,7 +546,7 @@ class CTFApp(ctk.CTk):
         
         ctk.CTkButton(self.container, text="1. Zip Manager (Pack & Unpack)", command=lambda: self.switch(ZipToolFrame), **opts).pack(pady=10)
         ctk.CTkButton(self.container, text="2. Text Converter (B64/Hex/Bin)", command=lambda: self.switch(DecoderFrame), **opts).pack(pady=10)
-        ctk.CTkButton(self.container, text="3. Caesar Cipher", command=lambda: self.switch(CaesarFrame), **opts).pack(pady=10)
+        ctk.CTkButton(self.container, text="3. Caesar Cipher (Decrypt All)", command=lambda: self.switch(CaesarFrame), **opts).pack(pady=10)
         ctk.CTkButton(self.container, text="4. File Analysis (Hash & EXIF)", command=lambda: self.switch(AnalysisFrame), **opts).pack(pady=10)
         
         repo_opts = opts.copy(); repo_opts.update({"fg_color": "#2a0040", "border_color": "#9400D3"})
