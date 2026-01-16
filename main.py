@@ -398,7 +398,7 @@ class ApkToolFrame(ctk.CTkFrame):
         self.inp_entry = ctk.CTkEntry(self, width=900)
         self.inp_entry.pack(pady=5)
         
-        ctk.CTkButton(self, text="Decompile & Scan APK", command=self.run_apk, fg_color="#E59400", width=250, height=40).pack(pady=15)
+        ctk.CTkButton(self, text="Browse, Decompile & Scan APK", command=self.run_apk, fg_color="#E59400", width=250, height=40).pack(pady=15)
 
         # Output
         ctk.CTkLabel(self, text="Inspector Log / Secrets Found:", anchor="w").pack(fill="x", padx=100)
