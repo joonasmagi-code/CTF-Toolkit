@@ -14,6 +14,7 @@ import hashlib
 import binascii
 import webbrowser
 import urllib.parse
+import re
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from PIL import Image, ExifTags
@@ -97,36 +98,22 @@ class ZipToolFrame(ctk.CTkFrame):
 
     # --- SECURITY HELPER FUNCTIONS ---
     def is_within_directory(self, base_dir, target_path):
-        # Teeb kindlaks, et target_path on tõesti base_dir sees
         abs_base = os.path.abspath(base_dir)
         abs_target = os.path.abspath(target_path)
         return os.path.commonpath([abs_base]) == os.path.commonpath([abs_base, abs_target])
 
     def validate_zip_safety(self, zip_ref, extract_path):
-        """
-        Kontrollib Zip-Pomme ja Zip-Slip rünnakuid enne lahtipakkimist.
-        """
         infos = zip_ref.infolist()
-        
-        # 1. Failide arvu piirang
         if len(infos) > self.MAX_FILES:
             raise RuntimeError(f"SECURITY WARNING: Too many files ({len(infos)} > {self.MAX_FILES})")
-
         total_size = 0
-        
         for info in infos:
-            # 2. Üksiku faili suuruse piirang
             if info.file_size > self.MAX_SINGLE_FILE:
                 raise RuntimeError(f"SECURITY WARNING: File too large: {info.filename} ({info.file_size / 1024 / 1024:.2f} MB)")
-            
             total_size += info.file_size
-            
-            # 3. Zip Slip kaitse (Path Traversal)
             out_path = os.path.join(extract_path, info.filename)
             if not self.is_within_directory(extract_path, out_path):
                 raise RuntimeError(f"SECURITY WARNING: Path traversal attempt detected (Zip Slip): {info.filename}")
-
-        # 4. Kogumahu piirang
         if total_size > self.MAX_TOTAL_SIZE:
              raise RuntimeError(f"SECURITY WARNING: Total extracted size too large ({total_size / 1024 / 1024:.2f} MB)")
 
@@ -142,46 +129,28 @@ class ZipToolFrame(ctk.CTkFrame):
         try:
             limit = int(self.ext_layers.get())
             work_dir = os.path.join(os.path.dirname(filename), self.extract_folder)
-            
-            # Puhastame eelmise töö kausta
             if os.path.exists(work_dir): shutil.rmtree(work_dir)
             os.makedirs(work_dir)
-            
-            # Kopeerime algse faili
             curr = os.path.join(work_dir, os.path.basename(filename))
             shutil.copy2(filename, curr)
-            
             count = 0
             self.log(self.ext_log, f"Starting Safe Extraction in: {work_dir}")
 
             while count < limit:
                 if not zipfile.is_zipfile(curr): break
-                
                 try:
                     with zipfile.ZipFile(curr, 'r') as z:
-                        # KÄIVITAME TURVAKONTROLLI
                         self.validate_zip_safety(z, work_dir)
-                        
-                        # Kui kõik on korras, pakime lahti
                         z.extractall(work_dir)
                         self.log(self.ext_log, f"[Layer {count+1}] Verified & Extracted.")
-                        
                 except RuntimeError as e:
-                    self.log(self.ext_log, f"❌ {e}")
-                    self.log(self.ext_log, "ABORTING EXTRACTION DUE TO SECURITY RISK.")
-                    return # Lõpetame töö kohe
+                    self.log(self.ext_log, f"❌ {e}"); self.log(self.ext_log, "ABORTING EXTRACTION."); return
                 except Exception as e:
-                    self.log(self.ext_log, f"Error: {e}")
-                    return
+                    self.log(self.ext_log, f"Error: {e}"); return
 
-                # Kustutame vana zipi
                 os.remove(curr)
-                
-                # Otsime uut faili (recursive)
-                files = [f for f in os.listdir(work_dir) if not f.startswith('.')] # ignore hidden
+                files = [f for f in os.listdir(work_dir) if not f.startswith('.')] 
                 if not files: break
-                
-                # Võtame esimese leitud faili järgmiseks ringiks
                 curr = os.path.join(work_dir, files[0])
                 count += 1
             
@@ -204,11 +173,9 @@ class ZipToolFrame(ctk.CTkFrame):
             work_dir = os.path.join(base_dir, self.compress_folder)
             if os.path.exists(work_dir): shutil.rmtree(work_dir)
             os.makedirs(work_dir)
-
             curr_name = os.path.basename(filename)
             curr_path = os.path.join(work_dir, curr_name)
             shutil.copy2(filename, curr_path)
-
             for i in range(1, limit + 1):
                 zip_name = f"layer_{i}.zip" if i < limit else "FINAL.zip"
                 zip_path = os.path.join(work_dir, zip_name)
@@ -217,14 +184,13 @@ class ZipToolFrame(ctk.CTkFrame):
                 os.remove(curr_path)
                 curr_path = zip_path
                 self.log(self.comp_log, f"Compressed layer {i}...")
-            
             self.log(self.comp_log, f"DONE! {work_dir}")
             os.startfile(work_dir)
         except Exception as e: self.log(self.comp_log, f"Error: {e}")
 
 
 # =============================================================================
-# 2. TOOL: TEXT CONVERTER (UPDATED: SHOW ALL LOOPS)
+# 2. TOOL: TEXT CONVERTER (SHOW ALL LOOPS)
 # =============================================================================
 class DecoderFrame(ctk.CTkFrame):
     def __init__(self, master, return_callback):
@@ -238,45 +204,36 @@ class DecoderFrame(ctk.CTkFrame):
         ctk.CTkButton(top, text="< Back", command=self.return_callback, width=80, fg_color="#333333").pack(side="left")
         ctk.CTkLabel(self, text="Text Converter", font=("Roboto", 24, "bold")).pack(pady=5)
 
-        # Input
         ctk.CTkLabel(self, text="Input Text:", anchor="w").pack(fill="x", padx=100)
         self.inp = ctk.CTkTextbox(self, height=120, width=900)
         self.inp.pack(pady=5)
 
-        ctrl = ctk.CTkFrame(self)
-        ctrl.pack(pady=10)
-        
+        ctrl = ctk.CTkFrame(self); ctrl.pack(pady=10)
         btn_opts = {"width": 120, "height": 35}
         
-        # Loop control
         loop_frame = ctk.CTkFrame(ctrl, fg_color="transparent")
         loop_frame.grid(row=0, column=0, columnspan=5, pady=(5, 15))
         ctk.CTkLabel(loop_frame, text="Repeats (Loops):", text_color="#E59400", font=("Roboto", 14, "bold")).pack(side="left", padx=5)
         self.loop_entry = ctk.CTkEntry(loop_frame, width=50, justify="center"); self.loop_entry.insert(0, "1"); self.loop_entry.pack(side="left", padx=5)
 
-        # Encode row
         ctk.CTkLabel(ctrl, text="ENCODE:").grid(row=1, column=0, padx=10, pady=5)
         ctk.CTkButton(ctrl, text="To Base64", command=lambda: self.run("enc", "b64"), **btn_opts).grid(row=1, column=1, padx=5, pady=5)
         ctk.CTkButton(ctrl, text="To Hex", command=lambda: self.run("enc", "hex"), **btn_opts).grid(row=1, column=2, padx=5, pady=5)
         ctk.CTkButton(ctrl, text="To Binary", command=lambda: self.run("enc", "bin"), **btn_opts).grid(row=1, column=3, padx=5, pady=5)
         ctk.CTkButton(ctrl, text="URL Encode", command=lambda: self.run("enc", "url"), **btn_opts).grid(row=1, column=4, padx=5, pady=5)
 
-        # Decode row
         ctk.CTkLabel(ctrl, text="DECODE:").grid(row=2, column=0, padx=10, pady=5)
         ctk.CTkButton(ctrl, text="From Base64", command=lambda: self.run("dec", "b64"), fg_color="#2E8B57", **btn_opts).grid(row=2, column=1, padx=5, pady=5)
         ctk.CTkButton(ctrl, text="From Hex", command=lambda: self.run("dec", "hex"), fg_color="#2E8B57", **btn_opts).grid(row=2, column=2, padx=5, pady=5)
         ctk.CTkButton(ctrl, text="From Binary", command=lambda: self.run("dec", "bin"), fg_color="#2E8B57", **btn_opts).grid(row=2, column=3, padx=5, pady=5)
         ctk.CTkButton(ctrl, text="URL Decode", command=lambda: self.run("dec", "url"), fg_color="#2E8B57", **btn_opts).grid(row=2, column=4, padx=5, pady=5)
 
-        # Output
         ctk.CTkLabel(self, text="Output Text:", anchor="w").pack(fill="x", padx=100)
-        self.out = ctk.CTkTextbox(self, height=250, width=900)
-        self.out.pack(pady=5)
+        self.out = ctk.CTkTextbox(self, height=250, width=900); self.out.pack(pady=5)
         ctk.CTkButton(self, text="Clear All", command=self.clear_all, fg_color="#8B0000", width=200).pack(pady=10)
 
     def clear_all(self):
-        self.inp.delete("0.0", "end")
-        self.out.delete("0.0", "end")
+        self.inp.delete("0.0", "end"); self.out.delete("0.0", "end")
 
     def single_step(self, txt, action, mode):
         if action == "enc":
@@ -284,15 +241,14 @@ class DecoderFrame(ctk.CTkFrame):
             elif mode == "hex": return binascii.hexlify(txt.encode()).decode()
             elif mode == "bin": return ' '.join(format(ord(c), '08b') for c in txt)
             elif mode == "url": return urllib.parse.quote(txt)
-        else: # decode
+        else:
             if mode == "b64": 
                 pad = len(txt) % 4
                 if pad: txt += "=" * (4 - pad)
                 return base64.b64decode(txt).decode('utf-8', 'ignore')
             elif mode == "hex": return bytes.fromhex(txt).decode('utf-8', 'ignore')
             elif mode == "bin": 
-                txt = txt.replace(" ", "")
-                n = int(txt, 2)
+                txt = txt.replace(" ", ""); n = int(txt, 2)
                 return n.to_bytes((n.bit_length() + 7) // 8, 'big').decode('utf-8', 'ignore')
             elif mode == "url": return urllib.parse.unquote(txt)
         return txt
@@ -300,38 +256,21 @@ class DecoderFrame(ctk.CTkFrame):
     def run(self, action, mode):
         txt = self.inp.get("0.0", "end").strip()
         if not txt: return
-        try:
-            limit = int(self.loop_entry.get())
-            if limit < 1: limit = 1
-        except ValueError: limit = 1
+        try: limit = int(self.loop_entry.get()); limit = 1 if limit < 1 else limit
+        except: limit = 1
         
-        # LOGGING ALL STEPS
         full_log = f"--- STARTING {action.upper()} {mode.upper()} ({limit} Loops) ---\n"
-        
         current_val = txt
-        count = 0
         try:
             for i in range(limit):
-                try: 
-                    new_val = self.single_step(current_val, action, mode)
-                except: 
-                    full_log += f"[Step {i+1}] ❌ Error/Invalid Format\n"
-                    break
-                
-                if not new_val or new_val == current_val: 
-                    full_log += f"[Step {i+1}] 🛑 No Change / End.\n"
-                    break
-                
+                try: new_val = self.single_step(current_val, action, mode)
+                except: full_log += f"[Step {i+1}] ❌ Error\n"; break
+                if not new_val or new_val == current_val: full_log += f"[Step {i+1}] 🛑 End.\n"; break
                 current_val = new_val.strip()
-                count += 1
-                
-                # APPEND STEP TO LOG
                 full_log += f"[{i+1}]: {current_val}\n"
-            
             full_log += f"--- FINISHED ---\n\n"
             self.out.insert("0.0", full_log)
-        except Exception as e: 
-            self.out.insert("0.0", f"CRITICAL ERROR: {e}\n\n")
+        except Exception as e: self.out.insert("0.0", f"CRITICAL ERROR: {e}\n\n")
 
 
 # =============================================================================
@@ -348,18 +287,12 @@ class CaesarFrame(ctk.CTkFrame):
         top.pack(fill="x", padx=20, pady=10)
         ctk.CTkButton(top, text="< Back", command=self.return_callback, width=80, fg_color="#333333").pack(side="left")
         ctk.CTkLabel(self, text="Caesar Cipher", font=("Roboto", 24, "bold")).pack(pady=5)
-        
         ctk.CTkLabel(self, text="Note: Works on English Alphabet (A-Z).", text_color="orange").pack()
 
-        # Input
         ctk.CTkLabel(self, text="Input Text:", anchor="w").pack(fill="x", padx=100)
-        self.inp = ctk.CTkTextbox(self, height=120, width=900)
-        self.inp.pack(pady=5)
+        self.inp = ctk.CTkTextbox(self, height=120, width=900); self.inp.pack(pady=5)
         
-        # Buttons
-        ctrl_spec = ctk.CTkFrame(self, fg_color="transparent")
-        ctrl_spec.pack(pady=5)
-        
+        ctrl_spec = ctk.CTkFrame(self, fg_color="transparent"); ctrl_spec.pack(pady=5)
         ctk.CTkLabel(ctrl_spec, text="Specific Shift:").pack(side="left")
         self.shift_val = ctk.CTkEntry(ctrl_spec, width=50, justify="center"); self.shift_val.insert(0, "13"); self.shift_val.pack(side="left", padx=5)
         ctk.CTkButton(ctrl_spec, text="Encrypt (+)", command=lambda: self.run_caesar(1), fg_color="#2E8B57", width=100).pack(side="left", padx=5)
@@ -367,30 +300,22 @@ class CaesarFrame(ctk.CTkFrame):
 
         ctk.CTkButton(self, text="DECRYPT ALL (Try 1-25)", command=self.run_brute, fg_color="#E59400", width=400, height=40, font=("Roboto", 16, "bold")).pack(pady=10)
 
-        # Output
         ctk.CTkLabel(self, text="Output Text:", anchor="w").pack(fill="x", padx=100)
-        self.out = ctk.CTkTextbox(self, height=300, width=900)
-        self.out.pack(pady=5)
+        self.out = ctk.CTkTextbox(self, height=300, width=900); self.out.pack(pady=5)
         ctk.CTkButton(self, text="Clear", command=lambda: self.out.delete("0.0","end"), fg_color="#8B0000").pack(pady=5)
 
     def run_caesar(self, direction):
         txt = self.inp.get("0.0", "end").strip()
-        try: 
-            val = int(self.shift_val.get())
-            shift = val * direction 
-        except: 
-            shift = 13 * direction
-        
-        mode_str = "ENCRYPT" if direction == 1 else "DECRYPT"
-        self.out.insert("0.0", f"--- {mode_str} (Shift {shift}) ---\n{self.rot(txt, shift)}\n\n")
+        try: val = int(self.shift_val.get()); shift = val * direction 
+        except: shift = 13 * direction
+        mode = "ENCRYPT" if direction == 1 else "DECRYPT"
+        self.out.insert("0.0", f"--- {mode} (Shift {shift}) ---\n{self.rot(txt, shift)}\n\n")
 
     def run_brute(self):
         txt = self.inp.get("0.0", "end").strip()
         self.out.delete("0.0", "end")
         res = "--- DECRYPT ALL (Showing all 25 Possibilities) ---\n"
-        for i in range(1, 26):
-            decoded_line = self.rot(txt, i)
-            res += f"ROT +{i:02}: {decoded_line}\n"
+        for i in range(1, 26): res += f"ROT +{i:02}: {self.rot(txt, i)}\n"
         self.out.insert("0.0", res)
 
     def rot(self, text, s):
@@ -418,58 +343,153 @@ class AnalysisFrame(ctk.CTkFrame):
         ctk.CTkButton(top, text="< Back", command=self.return_callback, width=80, fg_color="#333333").pack(side="left")
         ctk.CTkLabel(self, text="File Analysis (Hash & EXIF)", font=("Roboto", 24, "bold")).pack(pady=5)
 
-        # Input
         ctk.CTkLabel(self, text="Input File (Path):", anchor="w").pack(fill="x", padx=100)
-        self.inp_entry = ctk.CTkEntry(self, width=900)
-        self.inp_entry.pack(pady=5)
-
-        # Button
+        self.inp_entry = ctk.CTkEntry(self, width=900); self.inp_entry.pack(pady=5)
         ctk.CTkButton(self, text="Select File & Analyze", command=self.analyze, fg_color="#2E8B57", width=200).pack(pady=20)
         
-        # Output
         ctk.CTkLabel(self, text="Analysis Results (Output):", anchor="w").pack(fill="x", padx=100)
-        self.out = ctk.CTkTextbox(self, width=900, height=450)
-        self.out.pack(pady=5)
+        self.out = ctk.CTkTextbox(self, width=900, height=450); self.out.pack(pady=5)
 
     def analyze(self):
         f = filedialog.askopenfilename()
         if not f: return
-        
-        # Update Input Box
-        self.inp_entry.delete(0, "end")
-        self.inp_entry.insert(0, f)
-        
-        # Clear Output
-        self.out.delete("0.0", "end")
-        self.out.insert("end", f"FILE: {os.path.basename(f)}\n{'='*40}\n")
+        self.inp_entry.delete(0, "end"); self.inp_entry.insert(0, f)
+        self.out.delete("0.0", "end"); self.out.insert("end", f"FILE: {os.path.basename(f)}\n{'='*40}\n")
         
         try:
             md5, sha1, sha256 = hashlib.md5(), hashlib.sha1(), hashlib.sha256()
             with open(f, "rb") as file:
-                chunk = file.read(4096)
-                while chunk:
+                while chunk := file.read(4096):
                     md5.update(chunk); sha1.update(chunk); sha256.update(chunk)
-                    chunk = file.read(4096)
-            self.out.insert("end", "[HASH VALUES]\n")
-            self.out.insert("end", f"MD5:    {md5.hexdigest()}\n")
-            self.out.insert("end", f"SHA1:   {sha1.hexdigest()}\n")
-            self.out.insert("end", f"SHA256: {sha256.hexdigest()}\n\n")
+            self.out.insert("end", f"[HASH VALUES]\nMD5:    {md5.hexdigest()}\nSHA1:   {sha1.hexdigest()}\nSHA256: {sha256.hexdigest()}\n\n")
             
             try:
-                img = Image.open(f)
-                exif = img._getexif()
+                img = Image.open(f); exif = img._getexif()
                 if exif:
                     self.out.insert("end", "[EXIF METADATA]\n")
                     for tag, val in exif.items():
-                        tag_name = ExifTags.TAGS.get(tag, tag)
-                        self.out.insert("end", f"{tag_name}: {val}\n")
-                else: self.out.insert("end", "[EXIF] No metadata found (or not an image).\n")
-            except: self.out.insert("end", "[EXIF] Skipped (Not an image file).\n")
-        except Exception as e: self.out.insert("end", f"Error reading file: {e}")
+                        self.out.insert("end", f"{ExifTags.TAGS.get(tag, tag)}: {val}\n")
+                else: self.out.insert("end", "[EXIF] No metadata found.\n")
+            except: self.out.insert("end", "[EXIF] Not an image.\n")
+        except Exception as e: self.out.insert("end", f"Error: {e}")
 
 
 # =============================================================================
-# 5. TOOL: REPOSITORY
+# 5. TOOL: APK INSPECTOR (MINI-JADX) - UUS!
+# =============================================================================
+class ApkToolFrame(ctk.CTkFrame):
+    def __init__(self, master, return_callback):
+        super().__init__(master)
+        self.return_callback = return_callback
+        self.apk_out = "CTF_APK_EXTRACTED"
+        self.setup_ui()
+
+    def setup_ui(self):
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.pack(fill="x", padx=20, pady=10)
+        ctk.CTkButton(top, text="< Back", command=self.return_callback, width=80, fg_color="#333333").pack(side="left")
+        ctk.CTkLabel(self, text="APK Inspector (Mini-Jadx)", font=("Roboto", 24, "bold")).pack(pady=5)
+        
+        # Info
+        ctk.CTkLabel(self, text="Extracts APK resources and scans .dex/.xml files for flags (flag{}, http, password).", text_color="gray70").pack()
+
+        # Input
+        ctk.CTkLabel(self, text="Select APK File:", anchor="w").pack(fill="x", padx=100)
+        self.inp_entry = ctk.CTkEntry(self, width=900)
+        self.inp_entry.pack(pady=5)
+        
+        ctk.CTkButton(self, text="Decompile & Scan APK", command=self.run_apk, fg_color="#E59400", width=250, height=40).pack(pady=15)
+
+        # Output
+        ctk.CTkLabel(self, text="Inspector Log / Secrets Found:", anchor="w").pack(fill="x", padx=100)
+        self.out = ctk.CTkTextbox(self, width=900, height=400)
+        self.out.pack(pady=5)
+
+    def log(self, txt):
+        self.out.insert("end", txt + "\n"); self.out.see("end")
+
+    def run_apk(self):
+        f = filedialog.askopenfilename(filetypes=[("Android Package", "*.apk"), ("All Files", "*.*")])
+        if not f: return
+        self.inp_entry.delete(0, "end"); self.inp_entry.insert(0, f)
+        self.out.delete("0.0", "end")
+        
+        threading.Thread(target=self.do_process, args=(f,)).start()
+
+    def do_process(self, filepath):
+        try:
+            work_dir = os.path.join(os.path.dirname(filepath), self.apk_out)
+            if os.path.exists(work_dir): shutil.rmtree(work_dir)
+            os.makedirs(work_dir)
+
+            self.log(f"--- STARTING APK ANALYSIS ---")
+            self.log(f"Extracting to: {work_dir}")
+
+            # 1. Unzip
+            try:
+                with zipfile.ZipFile(filepath, 'r') as z:
+                    z.extractall(work_dir)
+                    file_list = z.namelist()
+            except Exception as e:
+                self.log(f"❌ Failed to extract APK: {e}"); return
+
+            self.log(f"✅ Extraction complete. Found {len(file_list)} files.")
+            self.log("-" * 30)
+            
+            # 2. Analyze contents
+            dex_files = [x for x in file_list if x.endswith(".dex")]
+            xml_files = [x for x in file_list if x.endswith(".xml")]
+            
+            self.log(f"Found {len(dex_files)} DEX (code) files: {', '.join(dex_files)}")
+            self.log(f"Found {len(xml_files)} XML (resource) files.")
+            self.log("-" * 30)
+            self.log("🔍 SCANNING FOR SECRETS (flags, urls, passwords)...")
+
+            # Regex patterns
+            patterns = {
+                "FLAG": re.compile(rb"flag\{.*?\}", re.IGNORECASE),
+                "HTTP": re.compile(rb"https?://[\w./-]+"),
+                "PASS": re.compile(rb"password\s*=\s*['\"](.*?)['\"]", re.IGNORECASE)
+            }
+
+            hits = 0
+            
+            # Walk and scan interesting files
+            for root, _, files in os.walk(work_dir):
+                for fname in files:
+                    if fname.endswith((".dex", ".xml", ".txt", ".json", ".properties")):
+                        full_path = os.path.join(root, fname)
+                        try:
+                            with open(full_path, "rb") as f_read:
+                                content = f_read.read()
+                                
+                                for p_name, p_val in patterns.items():
+                                    found = p_val.findall(content)
+                                    for match in found:
+                                        # Clean up binary garbage around strings
+                                        try:
+                                            s_dec = match.decode('utf-8', 'ignore')
+                                            if len(s_dec) > 4: # filter short noise
+                                                self.log(f"[{p_name}] in {fname}: {s_dec}")
+                                                hits += 1
+                                        except: pass
+                        except: pass
+
+            if hits == 0:
+                self.log("No obvious flags found using standard patterns.")
+            else:
+                self.log(f"Found {hits} potential secrets.")
+
+            self.log("-" * 30)
+            self.log(f"✅ FINISHED. You can explore files manually in: {work_dir}")
+            os.startfile(work_dir)
+
+        except Exception as e:
+            self.log(f"CRITICAL ERROR: {e}")
+
+
+# =============================================================================
+# 6. TOOL: REPOSITORY
 # =============================================================================
 class RepoFrame(ctk.CTkFrame):
     def __init__(self, master, return_callback):
@@ -502,7 +522,6 @@ class RepoFrame(ctk.CTkFrame):
             ("x64dbg", "Open-source x64/x32 debugger for Windows.", "https://x64dbg.com/"),
             ("Wireshark", "Network Protocol Analyzer.", "https://www.wireshark.org/download.html"),
             ("Burp Suite", "Web security testing (Proxy/Scanner).", "https://portswigger.net/burp/communitydownload"),
-            ("Jadx", "Decompile Android APK to Java.", "https://github.com/skylot/jadx/releases"),
             ("Hashcat", "GPU Password cracker.", "https://hashcat.net/hashcat/"),
         ]
         for name, desc, url in download_tools: self.add_tool_row(name, desc, url)
@@ -545,23 +564,24 @@ class CTFApp(ctk.CTk):
         title_fr = ctk.CTkFrame(self.container, fg_color="transparent")
         title_fr.pack(pady=(60, 40))
         ctk.CTkLabel(title_fr, text="CTF-TOOLKIT", font=("Orbitron", 50, "bold"), text_color="#00ff00").pack()
-        
-        # UUS ALAMPEALKIRI
         ctk.CTkLabel(title_fr, text="Essential Toolkit for CTF Challenges", font=("Arial", 16), text_color="gray80").pack()
 
-        opts = {"width": 450, "height": 60, "font": ("Roboto", 18, "bold"), "fg_color": "#1f1f1f", "border_color": "#00ff00", "border_width": 2, "hover_color": "#333333"}
+        opts = {"width": 450, "height": 55, "font": ("Roboto", 18, "bold"), "fg_color": "#1f1f1f", "border_color": "#00ff00", "border_width": 2, "hover_color": "#333333"}
         
-        ctk.CTkButton(self.container, text="1. Zip Manager (Pack & Unpack)", command=lambda: self.switch(ZipToolFrame), **opts).pack(pady=10)
-        ctk.CTkButton(self.container, text="2. Text Converter (B64/Hex/Bin)", command=lambda: self.switch(DecoderFrame), **opts).pack(pady=10)
-        ctk.CTkButton(self.container, text="3. Caesar Cipher (Decrypt All)", command=lambda: self.switch(CaesarFrame), **opts).pack(pady=10)
-        ctk.CTkButton(self.container, text="4. File Analysis (Hash & EXIF)", command=lambda: self.switch(AnalysisFrame), **opts).pack(pady=10)
+        ctk.CTkButton(self.container, text="1. Zip Manager (Pack & Unpack)", command=lambda: self.switch(ZipToolFrame), **opts).pack(pady=8)
+        ctk.CTkButton(self.container, text="2. Text Converter (B64/Hex/Bin)", command=lambda: self.switch(DecoderFrame), **opts).pack(pady=8)
+        ctk.CTkButton(self.container, text="3. Caesar Cipher (Decrypt All)", command=lambda: self.switch(CaesarFrame), **opts).pack(pady=8)
+        ctk.CTkButton(self.container, text="4. File Analysis (Hash & EXIF)", command=lambda: self.switch(AnalysisFrame), **opts).pack(pady=8)
         
-        repo_opts = opts.copy(); repo_opts.update({"fg_color": "#2a0040", "border_color": "#9400D3"})
-        ctk.CTkButton(self.container, text="5. Tool Repository (Links)", command=lambda: self.switch(RepoFrame), **repo_opts).pack(pady=20)
+        # UUS TÖÖRIIST (JADX)
+        apk_opts = opts.copy(); apk_opts.update({"fg_color": "#8B4500", "border_color": "#FFA500"})
+        ctk.CTkButton(self.container, text="5. APK Inspector (Mini-Jadx)", command=lambda: self.switch(ApkToolFrame), **apk_opts).pack(pady=8)
 
-        ctk.CTkButton(self.container, text="EXIT", command=self.destroy, width=200, height=40, fg_color="#8B0000", hover_color="red").pack(pady=30)
+        repo_opts = opts.copy(); repo_opts.update({"fg_color": "#2a0040", "border_color": "#9400D3"})
+        ctk.CTkButton(self.container, text="6. Tool Repository (Links)", command=lambda: self.switch(RepoFrame), **repo_opts).pack(pady=15)
+
+        ctk.CTkButton(self.container, text="EXIT", command=self.destroy, width=200, height=40, fg_color="#8B0000", hover_color="red").pack(pady=20)
         
-        # UUS VESIMÄRK
         ctk.CTkLabel(self.container, text="Joonas 2026", text_color="gray40").place(relx=0.98, rely=0.98, anchor="se")
 
     def switch(self, frame_class):
